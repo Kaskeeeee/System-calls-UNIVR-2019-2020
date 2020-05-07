@@ -10,7 +10,7 @@
 
 char * baseDeviceFIFO = "/tmp/dev_fifo.";
 
-void send_to_dev_in_range(int matrix[BOARD_ROWS][BOARD_COLS], double max_dist, int myX, int myY, Message msg){
+/*void send_to_dev_in_range(int matrix[BOARD_ROWS][BOARD_COLS], double max_dist, int myX, int myY, Message msg[10]){
     char pathToDev[25];
     msg.pid_sender = getpid();
 
@@ -24,9 +24,10 @@ void send_to_dev_in_range(int matrix[BOARD_ROWS][BOARD_COLS], double max_dist, i
                     if(write(fd, &msg, sizeof(msg)) != sizeof(msg));
                         errExit("write failed");
                     close(fd);
+                    return;
                 }
         }
-}
+}*/
 
 int in_range(int i, int j, int x, int y, double max_dist){
     int diff_ix = i - x;

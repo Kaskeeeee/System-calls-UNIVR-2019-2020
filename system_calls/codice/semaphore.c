@@ -2,7 +2,7 @@
 /// @brief Contiene l'implementazione delle funzioni
 ///         specifiche per la gestione dei SEMAFORI.
 
-#include<sys/sem.h>
+#include <sys/sem.h>
 #include "err_exit.h"
 #include "semaphore.h"
 

@@ -15,7 +15,9 @@
 #define OUT "output_file_"
 /*Declaration of methods*/
 int readInt(char * s);
-
+double readDouble(char * s);
+void printToOutput(int output_fd, struct ackMessage acks, char * message_text);
+char * get_tstamp(time_t t);
 
 /*Main*/
 int main(int argc, char * argv[]) {
@@ -25,7 +27,11 @@ int main(int argc, char * argv[]) {
         exit(1);
     }
 
-    key_t msqKey = atoi(argv[1]);
+    int msgKey = atoi(argv[1]);
+    if (msgKey <= 0) {
+        printf("The message queue key must be greater than zero!\n");
+        exit(1);
+    }
 
     Message msg;
     char buffer[20];
@@ -47,7 +53,7 @@ int main(int argc, char * argv[]) {
 
     printf("<Client> Insert the max distance: ");
     fgets(buffer, sizeof(buffer), stdin);
-    msg.max_distance = readInt(buffer);
+    msg.max_distance = readDouble(buffer);
 
     //Obtaining FIFO pathname, opening it and sending the message
     char actualDeviceFIFO[25];
@@ -62,16 +68,13 @@ int main(int argc, char * argv[]) {
 
     if(close(fifo_fd) == -1)
         errExit("close failed");
-    
-    if(unlink(actualDeviceFIFO) == -1)
-        errExit("unlink failed");
 
     printf("<Client> Message sent successfully!\n");
     printf("<Client> Waiting for a response...\n");
 
     //Opening the messagge queue with the given key and
     //waiting a response from the server
-    int msqid = msgget(msqKey, IPC_CREAT | S_IRUSR);
+    int msqid = msgget(msgKey, IPC_CREAT | S_IRUSR);
 
     struct ackMessage acks;
     size_t mSize = sizeof(struct ackMessage) - sizeof(long);
@@ -80,14 +83,13 @@ int main(int argc, char * argv[]) {
         errExit("msgrcv failed");
     
     //Creating and filling output file
-    
+    //Closing stdout in order to write on new opened file with printf
+    close(STDOUT_FILENO);
+
     sprintf(buffer, "%s%d", OUT, msg.message_id);
     int output_fd = open(buffer, O_CREAT | O_EXCL | O_WRONLY, S_IRWXU | S_IRWXG);
 
-    for(int i = 0; i < N_DEVICES; i++){
-        if(write(output_fd, &(acks.acks[i]), sizeof(Acknowledgment)) != sizeof(Acknowledgment))
-            errExit("write failed");
-    }
+    printToOutput(output_fd, acks, msg.message);
 
     if(close(output_fd) == -1)
         errExit("close failed");
@@ -106,10 +108,43 @@ int readInt(char * s){
     //the conversion has been done correctly if:
     //  errno has been unchanged
     //  endptr contains a value that is different from the original string
-    //  res is a positive number
+    //  res is positive
     if (errno != 0 || *endptr != '\n' || res <= 0) {
         printf("Invalid input argument\n");
         exit(1);
     }
     return res;
+}
+
+//the readDouble method converts and returns 
+//the value of a string into a double
+double readDouble(char * s){
+    char *endptr = NULL;
+    errno = 0;
+    double res = strtod(s, &endptr);
+
+    if(errno != 0 || *endptr != '\n' || res <= 1.0){
+        printf("Invalid input argument\n");
+        exit(1);
+    }
+}
+
+//the printToOutput method writes the acklist
+//to the output file
+void printToOutput(int output_fd, struct ackMessage acks, char * message_text){
+    printf("Message %d: %s\nAcknoledgement List:\n", acks.acks[0].message_id, message_text);
+    for(int i = 0; i < N_DEVICES; i++){
+        printf("%d, %d, %s\n", acks.acks[i].pid_sender, acks.acks[i].pid_receiver, get_tstamp(acks.acks[i].timestamp));
+    }
+}
+
+//the get_tstamp method returns a
+//string with format hh:mm:ss
+char * get_tstamp(time_t timer){
+    struct tm * tm = localtime(&timer);
+    char * buffer[20];
+
+    sprintf(buffer, "%04d-%02d-%02d %02d:%02d:%02d", tm->tm_year, tm->tm_mon, tm->tm_mday,\
+         tm->tm_hour, tm->tm_min, tm->tm_sec);
+    return buffer;
 }
