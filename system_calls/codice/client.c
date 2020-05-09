@@ -16,8 +16,8 @@
 /*Declaration of methods*/
 int readInt(char * s);
 double readDouble(char * s);
-void printToOutput(int output_fd, struct ackMessage acks, char * message_text);
-char * get_tstamp(time_t t);
+void printToOutput(int output_fd, struct ackMessage ack_list, char * message_text);
+void get_tstamp(time_t t, char * buffer, size_t buffer_size);
 
 /*Main*/
 int main(int argc, char * argv[]) {
@@ -76,10 +76,10 @@ int main(int argc, char * argv[]) {
     //waiting a response from the server
     int msqid = msgget(msgKey, IPC_CREAT | S_IRUSR);
 
-    struct ackMessage acks;
+    struct ackMessage ack_list;
     size_t mSize = sizeof(struct ackMessage) - sizeof(long);
 
-    if(msgrcv(msqid, &acks, mSize, getpid(), 0) == -1)
+    if(msgrcv(msqid, &ack_list, mSize, getpid(), 0) == -1)
         errExit("msgrcv failed");
     
     //Creating and filling output file
@@ -89,7 +89,7 @@ int main(int argc, char * argv[]) {
     sprintf(buffer, "%s%d", OUT, msg.message_id);
     int output_fd = open(buffer, O_CREAT | O_EXCL | O_WRONLY, S_IRWXU | S_IRWXG);
 
-    printToOutput(output_fd, acks, msg.message);
+    printToOutput(output_fd, ack_list, msg.message);
 
     if(close(output_fd) == -1)
         errExit("close failed");
@@ -131,20 +131,19 @@ double readDouble(char * s){
 
 //the printToOutput method writes the acklist
 //to the output file
-void printToOutput(int output_fd, struct ackMessage acks, char * message_text){
-    printf("Message %d: %s\nAcknoledgement List:\n", acks.acks[0].message_id, message_text);
+void printToOutput(int output_fd, struct ackMessage ack_list, char * message_text){
+    printf("Message %d: %s\nAcknoledgement List:\n", ack_list.acks[0].message_id, message_text);
+    char buffer[20];
     for(int i = 0; i < N_DEVICES; i++){
-        printf("%d, %d, %s\n", acks.acks[i].pid_sender, acks.acks[i].pid_receiver, get_tstamp(acks.acks[i].timestamp));
+        get_tstamp(ack_list.acks[i].timestamp, buffer, 20);
+        printf("%d, %d, %s\n", ack_list.acks[i].pid_sender, ack_list.acks[i].pid_receiver, buffer);
     }
 }
 
 //the get_tstamp method returns a
-//string with format hh:mm:ss
-char * get_tstamp(time_t timer){
-    struct tm * tm = localtime(&timer);
-    char * buffer[20];
-
-    sprintf(buffer, "%04d-%02d-%02d %02d:%02d:%02d", tm->tm_year, tm->tm_mon, tm->tm_mday,\
-         tm->tm_hour, tm->tm_min, tm->tm_sec);
-    return buffer;
+//string with format yy-mm-dd hh:mm:ss
+//but make sure you pass a buffer big enough
+void get_tstamp(time_t timer, char * buffer, size_t buffer_size){
+    struct tm * tm_info = localtime(&timer);
+    strftime(buffer, buffer_size, "%Y-%m-%d %H:%M:%S", tm_info);
 }
