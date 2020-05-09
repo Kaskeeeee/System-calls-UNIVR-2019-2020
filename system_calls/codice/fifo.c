@@ -29,10 +29,3 @@ char * baseDeviceFIFO = "/tmp/dev_fifo.";
         }
 }*/
 
-int in_range(int i, int j, int x, int y, double max_dist){
-    int diff_ix = i - x;
-    int diff_jy = j - y;
-    if((max_dist * max_dist) - (diff_ix * diff_ix) - (diff_jy * diff_jy) > 0)
-        return 1;
-    return 0;
-}
