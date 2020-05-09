@@ -38,7 +38,7 @@ void receive_update(Message * msgList, int size, Acknowledgment * ackList, int s
             //  - the list is full
             int j;
             for(j = 0; j < ACK_LIST_SIZE && ackList[j].message_id != msgList[i].message_id; j += N_DEVICES){
-                if(index_first_free_area == -1 && ackList[j].message_id == 0);
+                if(index_first_free_area == -1 && ackList[j].message_id == -1);
                     index_first_free_area = j;
             }
 
