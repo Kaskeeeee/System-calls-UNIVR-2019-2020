@@ -3,38 +3,32 @@
 
 #define _DEFAULT_SOURCE
 
-#include "err_exit.h"
 #include "defines.h"
 #include "shared_memory.h"
 #include "semaphore.h"
-#include "fifo.h"
 #include <signal.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <sys/sem.h>
-#include <sys/msg.h>
-#include <unistd.h>
+#include <sys/wait.h>
+
 
 //#define ACK_LIST_SEM 0;
 
 
 /*Declaration of methods*/
 void sigTermHandlerServer(int sig);
-void updatePosition(int pos_file_fd, int device_no);
-void print_positions(int step);
+void sigTermHandlerAckManager(int sig);
 void sigTermHandlerDevice(int sig);
-void initialize(Message * dev_msg_list, int size);
+void updatePosition(int pos_file_fd);
 
 /*Global variables*/
 int shmidBoard;                         //shared memory board id
 struct Board * board;                   //board pointer
-
+int msqid;                              //message queue id
 int shmidAckList;                       //acklist id
 Acknowledgment * ackList;               //acklist pointer
 int sem_idx_board;                      //semaphore board id
 int sem_idx_ack;                        //semaphore acklist id
-int sem_idx_access;
-pid_t children_pids[1 + N_DEVICES];     //array used to keep all the pids of generated processes
+int sem_idx_access;                     //semaphore access id
+pid_t children_pids[1 + N_DEVICES];     //array to keep children pids
 int prevX = -1, prevY = -1;             //variables to keep track of last position in order
                                         //to clear it when the devices moves away
 
@@ -126,8 +120,12 @@ int main(int argc, char * argv[]) {
                 ACK_MANAGER CODE
          -----------------------------*/
         
+        //assign a specific sigHandler to SIGTERM
+        if(signal(SIGTERM, sigTermHandlerAckManager) == SIG_ERR)
+            errExit("signal failed");
+
         //Creating a message queue
-        int msqid = msgget(msgKey, IPC_CREAT | S_IRUSR | S_IWUSR);
+        msqid = msgget(msgKey, IPC_CREAT | S_IRUSR | S_IWUSR);
         if(msqid == -1)
             errExit("msgget failed");
         
@@ -136,41 +134,9 @@ int main(int argc, char * argv[]) {
         
         while(1){
             semOp(sem_idx_ack, 0, -1);
-            //for loop to check if there are 5 acks of a message id
-            //and to free memory
-            for(int i = 0; i < ACK_LIST_SIZE; i++){
-                int count = 1;
-                //save the message id
-                int m_id = ackList[i].message_id;
-                //check if it's a real message id
-                if(m_id != 0){
-                    //check if there are N_DEVICES (5) acknowledgements
-                    for(int j = i + 1; j < i + N_DEVICES; j++){
-                        if(ackList[j].message_id == m_id)
-                            count++;
-                    }
-                    if(count == N_DEVICES){
-                        //create the message for the message queue;
-                        struct ackMessage message_to_client;
-                        //mtype will be the pid of the client since
-                        //ackList[i] identify the first ack that has
-                        //client's pid in the field pid_sender
-                        message_to_client.mtype = ackList[i].pid_sender;
-                        int j;
-                        for(j = i; j < i + N_DEVICES; j++){
-                            message_to_client.acks[j] = ackList[j];
-                            //mark the position as free
-                            ackList[j].message_id = 0;
-                        }
-                        //tell the last device to delete last message
-                 //TODO       kill(ackList[j-1].pid_receiver, SIGUSR1);
-                        //send message
-                        if(msgsnd(msqid, &message_to_client, sizeof(struct ackMessage), 0) == -1)
-                            errExit("msgsnd failed");
-                    }
-                }
-                
-            }
+            
+            check_list(ackList, msqid);
+            
             semOp(sem_idx_ack, 0, 1);
             sleep(5);
         }
@@ -201,7 +167,8 @@ int main(int argc, char * argv[]) {
             int device_no = i;
 
             semOp(sem_idx_board, device_no, -1);
-            updatePosition(fd, device_no);
+
+            updatePosition(fd);
             if(device_no != N_DEVICES - 1)
                 semOp(sem_idx_board, device_no + 1, 1);
 
@@ -215,11 +182,25 @@ int main(int argc, char * argv[]) {
             //init the list
             initialize(msgList, 20);
             while(1){
-                //Invio messaggi
-                send_messages(board, prevX, prevY, msgList, 20);
+
+                semOp(sem_idx_board, device_no, -1);
+                //Send the messages 
+                semOp(sem_idx_ack, 0, -1);
+                send_messages(ackList, board, prevX, prevY, msgList, 20);
+                semOp(sem_idx_ack, 0, 1);
 
                 //Get the messages and update acknowledgement list
-                receive_update(msgList, 20, ackList, sem_idx_ack, serverFIFO);
+                semOp(sem_idx_ack, 0, -1);
+                receive_update(msgList, 20, ackList, serverFIFO);
+                semOp(sem_idx_ack, 0, 1);
+
+                //update position
+                updatePosition(fd);
+                if(device_no != N_DEVICES - 1)
+                    semOp(sem_idx_board, device_no + 1, 1);
+
+                //unlock the server
+                semOp(sem_idx_access, 0, -1);
             }
 
         }
@@ -228,7 +209,7 @@ int main(int argc, char * argv[]) {
 
     /*-----------------------------
              SERVER CODE
-       ---------------------------*/
+     -----------------------------*/
         
     int step = 0;
     while(1){
@@ -238,7 +219,7 @@ int main(int argc, char * argv[]) {
         //Waits for all the devices to updatePosition()
         //and prints the positions
         semOp(sem_idx_access, 0, 0);
-        print_positions(step);
+        print_positions(step, board, children_pids, ackList);
 
         //Set again the semaphore to N_DEVICES
         semOp(sem_idx_access, 0, N_DEVICES);
@@ -248,12 +229,39 @@ int main(int argc, char * argv[]) {
     } 
 }
 
-//non completa
+//Signal handler that closes all the IPCs
+//created by the server
 void sigTermHandlerServer(int sig){
-    for(int i = 1; i <= N_DEVICES; i++)
+    for(int i = 0; i <= N_DEVICES; i++)
         kill(children_pids[i], SIGTERM);
+    
+    //wait for all the children to exit
+    while(wait(NULL) != -1);
+    if(errno != ECHILD)
+        errExit("Unexpected error");
+
+    //remove semaphores
+    if(semctl(sem_idx_board, 0, IPC_RMID, NULL) == -1 ||
+        semctl(sem_idx_ack, 0, IPC_RMID, NULL) == -1 ||
+        semctl(sem_idx_access, 0, IPC_RMID, NULL) == -1)
+        errExit("could not remove semaphores");
+
+    //remove board
     free_shared_memory(board);
     remove_shared_memory(shmidBoard);
+
+    //remove acklist
+    free_shared_memory(ackList);
+    remove_shared_memory(shmidAckList);
+
+    exit(0);
+}
+
+//Signal handler for ack manager:
+//it closes the message queue befor exiting
+void sigTermHandlerAckManager(int sig){
+    if(msgctl(msqid, IPC_RMID, NULL) == -1)
+        errExit("msgctl IPC_RMID failed");
     exit(0);
 }
 
@@ -268,13 +276,12 @@ void sigTermHandlerDevice(int sig){
     if (unlink(pathToMyFIFO) != 0)
         errExit("unlink failed");
     
-    _exit(0);
+    exit(0);
 }
 
 //the updatePosition method reads from file the next
 //position of a device and updates it in the board matrix
-//and in the devices_positions matrix
-void updatePosition(int pos_file_fd, int device_no){
+void updatePosition(int pos_file_fd){
     //read the first 3 characters of the file
     char buffer[4];
     int bR = read(pos_file_fd, buffer, 3);
@@ -308,22 +315,3 @@ void updatePosition(int pos_file_fd, int device_no){
     }
 }
 
-//the print_positions method is used to 
-//print informations about devices' positions
-void print_positions(int step){
-    int x, y;
-    printf("# Step %d: device positions #############", step);
-    for(int i = 0; i < N_DEVICES; i++){
-        pid_t devpid = children_pids[i+1];
-        getPosition(devpid, board, &x, &y);
-        printf("%d  %d  %d  msgs: ", devpid, x, y);
-        print_device_msgs(devpid);
-        printf("\n");
-    }
-    printf("#########################################");
-}
-
-void initialize(Message * dev_msg_list, int size){
-    for(int i = 0; i < size; i++)
-        dev_msg_list[i].message_id = -1;
-}
