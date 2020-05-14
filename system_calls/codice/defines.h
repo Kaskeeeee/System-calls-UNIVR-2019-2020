@@ -16,11 +16,13 @@
 #include <sys/msg.h>
 #include "err_exit.h"
 #include "fifo.h"
+#include <signal.h>
 
 #define N_DEVICES 5
 #define ACK_LIST_SIZE 100
 #define BOARD_COLS 10
 #define BOARD_ROWS 10
+#define MSG_ARRAY_SIZE 20
 
 typedef struct {
     pid_t pid_sender;
@@ -34,7 +36,7 @@ typedef struct {
     pid_t pid_receiver;
     int message_id;
     char message[256];
-    int max_distance;
+    double max_distance;
 } Message;
 
 struct ackMessage {
@@ -50,7 +52,7 @@ void getPosition(pid_t pid, struct Board * board, int * x, int * y);
 
 //the receive_update method receive all the messages in the fifo
 //and organize the acknowledgement list
-void receive_update(Message * msgList, int size, Acknowledgment * ackList, int serverFIFO);
+void receive_update(Message * msgList, Acknowledgment * ackList, int serverFIFO);
 
 //the in_range method is a support function that checks if a (i,j) device
 //is reachable from the (x,y) identified device.
@@ -58,14 +60,11 @@ int in_range(int i, int j, int x, int y, double max_dist);
 
 //the send_messages method checks if there are devices in range to
 //send all the messages stored in the array of the device;
-void send_messages(Acknowledgment * ackList, struct Board * board, int x, int y, Message * msgList, int size);
+void send_messages(Acknowledgment * ackList, struct Board * board, int x, int y, Message * msgList);
 
 //the print_positions method is used to 
 //print informations about devices' positions
 void print_positions(int step, struct Board * board, int * children_pids, Acknowledgment * ackList);
-
-//initialize as empty the message list of a device
-void initialize(Message * dev_msg_list, int size);
 
 //the check_list method is used by the ack_manager to check
 //if a set of acks is complete, if so it gets removed and a
@@ -96,3 +95,13 @@ void printToOutput(struct ackMessage ack_list, char * message_text);
 //string with format yy-mm-dd hh:mm:ss
 //but make sure you pass a buffer big enough
 void get_tstamp(time_t t, char * buffer, size_t buffer_size);
+
+//insertion_sort_msg helps to keep
+//the array of messages ordered.
+//this method orders the array by
+//message_id in non-ascending order
+void insertion_sort_msg(Message * msgList);
+
+//the updatePosition method reads from file the next
+//position of a device and updates it in the board matrix
+void updatePosition(int pos_file_fd, struct Board * board, int * prevX, int * prevY);

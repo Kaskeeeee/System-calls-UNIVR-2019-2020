@@ -22,7 +22,7 @@ int main(int argc, char * argv[]) {
     }
 
     Message msg;
-    char buffer[20];
+    char buffer[25];
 
     //Input of necessary data
     printf("<Client> Hello, let's send a message!\n");
@@ -36,12 +36,12 @@ int main(int argc, char * argv[]) {
     fgets(buffer, sizeof(buffer), stdin);
     msg.message_id = readInt(buffer);
 
-    printf("<Client> Insert your message: ");
-    fgets(msg.message, sizeof(msg.message), stdin);
-
     printf("<Client> Insert the max distance: ");
     fgets(buffer, sizeof(buffer), stdin);
     msg.max_distance = readDouble(buffer);
+
+    printf("<Client> Insert your message: ");
+    fgets(msg.message, sizeof(msg.message), stdin);
 
     //Obtaining FIFO pathname, opening it and sending the message
     char actualDeviceFIFO[25];
@@ -72,10 +72,11 @@ int main(int argc, char * argv[]) {
     
     //Creating and filling output file
     //Closing stdout in order to write on new opened file with printf
+    int dup_out = dup(STDOUT_FILENO);
     close(STDOUT_FILENO);
 
-    sprintf(buffer, "%s%d", OUT, msg.message_id);
-    int output_fd = open(buffer, O_CREAT | O_EXCL | O_WRONLY, S_IRWXU | S_IRWXG);
+    sprintf(buffer, "%s%d.txt", OUT, msg.message_id);
+    int output_fd = open(buffer, O_CREAT | O_TRUNC | O_WRONLY, S_IRWXU | S_IRWXG);
     if(output_fd == -1)
         errExit("open failed");
 
@@ -84,7 +85,10 @@ int main(int argc, char * argv[]) {
     if(close(output_fd) == -1)
         errExit("close failed");
 
-    printf("<Client> Acknowledge list printed in the %s file!\n", buffer);
+    char result[80];
+    sprintf(result, "<Client> Acknowledge list printed in the %s file!\n", buffer);
+    if(write(dup_out, result, strlen(result)) == -1)
+        errExit("write failed");
 }
 
 

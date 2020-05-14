@@ -17,7 +17,7 @@
 void sigTermHandlerServer(int sig);
 void sigTermHandlerAckManager(int sig);
 void sigTermHandlerDevice(int sig);
-void updatePosition(int pos_file_fd);
+
 
 /*Global variables*/
 int shmidBoard;                         //shared memory board id
@@ -29,8 +29,6 @@ int sem_idx_board;                      //semaphore board id
 int sem_idx_ack;                        //semaphore acklist id
 int sem_idx_access;                     //semaphore access id
 pid_t children_pids[1 + N_DEVICES];     //array to keep children pids
-int prevX = -1, prevY = -1;             //variables to keep track of last position in order
-                                        //to clear it when the devices moves away
 
 int serverFIFO;                         //serverFIFO id
 char pathToMyFIFO[25];                  //pathname to fifo
@@ -39,7 +37,7 @@ char pathToMyFIFO[25];                  //pathname to fifo
 int main(int argc, char * argv[]) {
     
     if(argc != 3){
-        printf("Usage: %s msg_queue_key positions_file", argv[0]);
+        printf("Usage: %s msg_queue_key positions_file\n", argv[0]);
         exit(1);
     }
 
@@ -100,7 +98,7 @@ int main(int argc, char * argv[]) {
 
     //Acknowledge list semaphore set
     sem_idx_ack = semget(IPC_PRIVATE, 1, IPC_CREAT | S_IRUSR | S_IWUSR);
-    arg.val = 0;
+    arg.val = 1;
     if(semctl(sem_idx_ack, 0, SETVAL, arg) == -1)
         errExit("semctl failed");
     
@@ -164,11 +162,12 @@ int main(int argc, char * argv[]) {
             if(serverFIFO == -1)
                 errExit("fifo open failed");
 
-            int device_no = i;
+            const int device_no = i;
+            int prevX = -1, prevY = -1;
 
             semOp(sem_idx_board, device_no, -1);
 
-            updatePosition(fd);
+            updatePosition(fd, board, &prevX, &prevY);
             if(device_no != N_DEVICES - 1)
                 semOp(sem_idx_board, device_no + 1, 1);
 
@@ -178,25 +177,30 @@ int main(int argc, char * argv[]) {
             semOp(sem_idx_access, 0, -1);
 
             //List of device messages
-            Message msgList[20];
-            //init the list
-            initialize(msgList, 20);
-            while(1){
+            Message msgList[MSG_ARRAY_SIZE] = {0};
 
+            //core of the device
+            while(1){
                 semOp(sem_idx_board, device_no, -1);
+
                 //Send the messages 
                 semOp(sem_idx_ack, 0, -1);
-                send_messages(ackList, board, prevX, prevY, msgList, 20);
+                send_messages(ackList, board, prevX, prevY, msgList);
                 semOp(sem_idx_ack, 0, 1);
+
+                //order the list of messages
+                //pushing to the tail of the array
+                //the "non-messages" (message_id = 0)
+                insertion_sort_msg(msgList);
 
                 //Get the messages and update acknowledgement list
                 semOp(sem_idx_ack, 0, -1);
-                receive_update(msgList, 20, ackList, serverFIFO);
+                receive_update(msgList, ackList, serverFIFO);
                 semOp(sem_idx_ack, 0, 1);
 
                 //update position
-                updatePosition(fd);
-                if(device_no != N_DEVICES - 1)
+                updatePosition(fd, board, &prevX, &prevY);
+                if(device_no < N_DEVICES - 1)
                     semOp(sem_idx_board, device_no + 1, 1);
 
                 //unlock the server
@@ -210,7 +214,7 @@ int main(int argc, char * argv[]) {
     /*-----------------------------
              SERVER CODE
      -----------------------------*/
-        
+ 
     int step = 0;
     while(1){
         //Unlocks the first device
@@ -219,12 +223,16 @@ int main(int argc, char * argv[]) {
         //Waits for all the devices to updatePosition()
         //and prints the positions
         semOp(sem_idx_access, 0, 0);
+        semOp(sem_idx_ack, 0, -1);
+
         print_positions(step, board, children_pids, ackList);
+        
+        semOp(sem_idx_ack, 0, 1);
 
         //Set again the semaphore to N_DEVICES
         semOp(sem_idx_access, 0, N_DEVICES);
-
         sleep(2);
+
         step++;
     } 
 }
@@ -277,41 +285,5 @@ void sigTermHandlerDevice(int sig){
         errExit("unlink failed");
     
     exit(0);
-}
-
-//the updatePosition method reads from file the next
-//position of a device and updates it in the board matrix
-void updatePosition(int pos_file_fd){
-    //read the first 3 characters of the file
-    char buffer[4];
-    int bR = read(pos_file_fd, buffer, 3);
-    
-    //buffer now should contain a string
-    //with the format: "x,y"
-
-    if(bR != -1){
-        buffer[bR] = '\0';
-        //lseek skips the next '|' or '\n'
-        lseek(pos_file_fd, 1, SEEK_CUR);
-    }
-    else errExit("read failed");
-
-    //if you haven't reached EOF
-    //then update position
-    if(bR != 0){
-        int x = (int)(buffer[0] - '0');
-        int y = (int)(buffer[2] - '0');
-
-        if(board->matrix[x][y] != 0){
-            printf("Error, cell is not free!\n");
-            kill(getppid(), SIGTERM);
-        }
-
-        if(prevX != -1 && prevY != -1)
-            board->matrix[prevX][prevY] = 0;
-        board->matrix[x][y] = getpid();
-        prevX = x;
-        prevY = y;
-    }
 }
 
