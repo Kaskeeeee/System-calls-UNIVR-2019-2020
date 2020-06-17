@@ -4,6 +4,8 @@
 
 #include "defines.h"
 
+char * msg_id_history_file = "/tmp/msg_id_history_file";
+
 /*------------------------------------------------------------
                 
                 SERVER METHODS
@@ -12,15 +14,16 @@
 
 void print_positions(int step, struct Board * board, int * children_pids, Acknowledgment * ackList){
     int x, y;
-    printf("# Step %d: device positions ##############\n", step);
+    pid_t devpid;
+    printf("\n# Step %2d: device positions ##############\n", step);
     for(int i = 1; i <= N_DEVICES; i++){
-        pid_t devpid = children_pids[i];
+        devpid = children_pids[i];
         getPosition(devpid, board, &x, &y);
-        printf("%d  %d  %d  msgs: ", devpid, x, y);
+        printf("DEVICE[%d]: %d  (%d, %d)  msgs: ", i, devpid, x, y);
         print_device_msgs(devpid, ackList);
         printf("\n");
     }
-    printf("#########################################\n");
+    printf("######################################### (Server: %d)\n", getpid());
 }
 
 void getPosition(pid_t pid, struct Board * board, int * x, int * y){
@@ -92,7 +95,7 @@ void receive_update(Message * msgList, Acknowledgment * ackList, int serverFIFO)
                 ackList[index_first_free_area] = ack;
             //if the list is full then the message is rejected
             else{
-                printf("Error one of the list is full!\n");
+                printf("Error, the list is full!\n");
                 kill(getppid(), SIGTERM);
             }
 
@@ -154,9 +157,7 @@ void send_messages(Acknowledgment * ackList, struct Board * board, int x, int y,
 int in_range(int i, int j, int x, int y, double max_dist){
     int diff_ix = i - x;
     int diff_jy = j - y;
-    if((max_dist * max_dist) >= (double)((diff_ix * diff_ix) + (diff_jy * diff_jy)))
-        return 1;
-    return 0;
+    return (max_dist * max_dist) >= ((diff_ix * diff_ix) + (diff_jy * diff_jy));
 }
 
 int received_yet(Acknowledgment * ackList, int message_id, pid_t dest){
@@ -170,13 +171,13 @@ void insertion_sort_msg(Message * msgList){
     //implementation of insertion sort:
     //sorting on message id's
     for(int j = 1; j < MSG_ARRAY_SIZE; j++){
-        int m_id = msgList[j].message_id;
+        Message pivot = msgList[j];
         int i = j - 1;
-        while(i >= 0 && msgList[i].message_id < m_id){
+        while(i >= 0 && msgList[i].message_id < pivot.message_id){
             msgList[i+1] = msgList[i];
             i -= 1;
         }
-        msgList[i+1].message_id = m_id;
+        msgList[i+1] = pivot;
     }
 }
 
@@ -185,15 +186,20 @@ void updatePosition(int pos_file_fd, struct Board * board, int * prevX, int * pr
     char buffer[4];
     int bR = read(pos_file_fd, buffer, 3);
     
+    if(bR == 0){
+        //restart
+        lseek(pos_file_fd, 0, SEEK_SET);
+        bR = read(pos_file_fd, buffer, 3);
+    }
+
     //buffer now should contain a string
     //with the format: "x,y"
-
     if(bR != -1){
         buffer[bR] = '\0';
         //lseek skips the next '|' or '\n'
         lseek(pos_file_fd, 1, SEEK_CUR);
-    }
-    else errExit("read failed");
+    }else errExit("read failed");
+    
 
     //if you haven't reached EOF
     //then update position
@@ -212,10 +218,6 @@ void updatePosition(int pos_file_fd, struct Board * board, int * prevX, int * pr
         *prevX = x;
         *prevY = y;
     }
-    else{
-        printf("Input file has reached EOF!\n");
-        kill(getppid(), SIGTERM);
-    }
 }
 
 
@@ -230,11 +232,12 @@ void check_list(Acknowledgment * ackList, int msqid){
     //for loop to check if there are 5 acks of a message id
     //and to free memory
     for(int i = 0; i < ACK_LIST_SIZE; i += N_DEVICES){
-        int count = 1;
         //save the message id
         int m_id = ackList[i].message_id;
         //check if it's a real message id
         if(m_id != 0){
+            int count = 1;
+
             //check if there are N_DEVICES (5) acknowledgements
             for(int j = i + 1; j < i + N_DEVICES; j++){
                 if(ackList[j].message_id == m_id)
@@ -247,8 +250,8 @@ void check_list(Acknowledgment * ackList, int msqid){
                 //ackList[i] identify the first ack that has
                 //client's pid in the field pid_sender
                 message_to_client.mtype = ackList[i].pid_sender;
-                int j;
-                for(j = i; j < i + N_DEVICES; j++){
+                
+                for(int j = i; j < i + N_DEVICES; j++){
                     message_to_client.acks[j-i] = ackList[j];
                     //mark the position as free
                     ackList[j].message_id = 0;
@@ -280,11 +283,8 @@ int readInt(char * s){
     //the conversion has been done correctly if:
     //  errno has been unchanged
     //  endptr contains a value that is different from the original string
-    //  res is positive
-    if (errno != 0 || *endptr != '\n' || res <= 0) {
-        printf("Invalid input argument\n");
-        exit(1);
-    }
+    if (errno != 0 || *endptr != '\n')
+        errExit("<Client> Conversion to integer failed");
     return res;
 }
 
@@ -294,10 +294,8 @@ double readDouble(char * s){
     errno = 0;
     double res = strtod(s, &endptr);
 
-    if(errno != 0 || *endptr != '\n' || res <= 1.0){
-        printf("Invalid input argument\n");
-        exit(1);
-    }
+    if(errno != 0 || *endptr != '\n')
+      errExit("<Client> Conversion to integer failed");
 
     return res;
 }
@@ -316,4 +314,27 @@ void printToOutput(struct ackMessage ack_list, char * message_text){
 void get_tstamp(time_t timer, char * buffer, size_t buffer_size){
     struct tm * tm_info = localtime(&timer);
     strftime(buffer, buffer_size, "%Y-%m-%d %H:%M:%S", tm_info);
+}
+
+int m_id_available(int history_fd, int chosen_id){
+    //read file from beginning
+    lseek(history_fd, 0, SEEK_SET);
+
+    int current_id = 0;
+    while(read(history_fd, &current_id, sizeof(int))){
+        if(current_id == chosen_id){
+            printf("<Client> Message id is already taken!\n");
+            return 0;
+        }
+    }
+    if(write(history_fd, &chosen_id, sizeof(int)) == -1)
+        errExit("write failed");
+    return 1;    
+}
+
+void free_message_id(int history_fd){
+    int free_id = -1;
+    lseek(history_fd, -sizeof(int), SEEK_CUR);
+    if(write(history_fd, &free_id, sizeof(int)) == -1)
+        errExit("write failed");
 }

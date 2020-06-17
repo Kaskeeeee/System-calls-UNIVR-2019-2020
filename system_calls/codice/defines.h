@@ -24,6 +24,8 @@
 #define BOARD_ROWS 10
 #define MSG_ARRAY_SIZE 20
 
+char * msg_id_history_file;
+
 typedef struct {
     pid_t pid_sender;
     pid_t pid_receiver;
@@ -105,3 +107,11 @@ void insertion_sort_msg(Message * msgList);
 //the updatePosition method reads from file the next
 //position of a device and updates it in the board matrix
 void updatePosition(int pos_file_fd, struct Board * board, int * prevX, int * prevY);
+
+//the m_id_available search for a message_id
+//in the choosen file, if it finds the same id
+//as the one chosen by user it returns false
+int m_id_available(int history_fd, int chosen_id);
+
+//set the id available again
+void free_message_id(int history_fd);

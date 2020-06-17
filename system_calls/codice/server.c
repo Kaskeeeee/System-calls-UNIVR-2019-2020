@@ -9,10 +9,6 @@
 #include <signal.h>
 #include <sys/wait.h>
 
-
-//#define ACK_LIST_SEM 0;
-
-
 /*Declaration of methods*/
 void sigTermHandlerServer(int sig);
 void sigTermHandlerAckManager(int sig);
@@ -63,16 +59,36 @@ int main(int argc, char * argv[]) {
     if(signal(SIGTERM, sigTermHandlerServer) == SIG_ERR)
         errExit("signal failed");
 
-    printf("<Server> Server ready! [PID: %d]\n", getpid());
+    printf("---   SERVER READY!   ----------\n");
+    printf("\n    PID: [ %d ]\n\n", getpid());
+    printf("--------------------------------\n\n");
 
-    //Checking if the file exists and opening it
-    printf("<Server> Opening the file: %s...\n", argv[2]);
+    //Checking if the file is a regular one and if it exists by opening it    
+    struct stat statbuf;
+    if(stat(argv[2], &statbuf) == -1)
+        errExit("<Server> System call 'stat' failed");
     
+    //is it a regular file?
+    if(!S_ISREG(statbuf.st_mode)){
+        printf("<Server> It looks like you're not opening a regular file!\n");
+        printf("<Server> Please try again!\n");
+        exit(1);
+    }
+
+    printf("<Server> Opening the file: %s...\n", argv[2]);
     int fd = open(argv[2], O_RDONLY);
     if(fd == -1)
         errExit("open failed");
     
-    printf("<Server> Done!\n");
+    //Creating a new file to store already received pids
+    printf("<Server> Creating message_id's history file!\n");
+
+    int history_fd = open(msg_id_history_file, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    if(history_fd == -1)
+        errExit("open failed");
+    if(close(history_fd))
+        errExit("close failed");
+
 
     //Managing shared memories
     //Board
@@ -261,6 +277,10 @@ void sigTermHandlerServer(int sig){
     //remove acklist
     free_shared_memory(ackList);
     remove_shared_memory(shmidAckList);
+
+    //remove history file
+    if(unlink(msg_id_history_file) == -1)
+        errExit("unlink failed");
 
     exit(0);
 }
